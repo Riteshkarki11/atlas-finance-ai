@@ -1,22 +1,17 @@
-# Virtual environment
+# Heavy Zip Archives
+*.zip
+*.tar.gz
+*.7z
+
+# Node / Dependencies
+node_modules/
+.next/
+out/
+
+# Python Virtual Envs & Caches
 venv/
-
-# Python cache
+.venv/
 __pycache__/
-*.py[cod]
-
-# Testing
-.pytest_cache/
-
-# IDE
-.vscode/
-.idea/
-
-# macOS
+*.pyc
 .DS_Store
-
-# Environment variables
 .env
-
-# Logs
-*.log

@@ -1,25 +1,19 @@
+import httpx
+
 from backend.providers.base_provider import BaseProvider
 from backend.schemas.search import SearchResult
 
 
 class YahooProvider(BaseProvider):
-    """
-    Yahoo Finance implementation.
-    """
+    SEARCH_URL = "https://query1.finance.yahoo.com/v1/finance/search"
+
+    HEADERS = {
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/138.0.0.0 Safari/537.36"
+        )
+    }
 
     def search(self, query: str) -> list[SearchResult]:
-
-        companies = [
-            SearchResult(
-                symbol="AAPL",
-                company_name="Apple Inc.",
-                exchange="NASDAQ",
-            ),
-            SearchResult(
-                symbol="MSFT",
-                company_name="Microsoft Corporation",
-                exchange="NASDAQ",
-            ),
-        ]
-
-        return companies
+        return []

@@ -1,0 +1,673 @@
+====================
+backend/services/__init__.py
+====================
+
+====================
+backend/services/balance_sheet_service.py
+====================
+from backend.schemas.balance_sheet import BalanceSheetResponse
+from backend.services.base_service import BaseService
+
+
+class BalanceSheetService(BaseService):
+
+    def get_balance_sheet(self, symbol: str) -> BalanceSheetResponse:
+        return self.provider.balance_sheet(symbol)
+
+
+balance_sheet_service = BalanceSheetService()
+====================
+backend/services/base_service.py
+====================
+from backend.providers.fmp_provider import FMPProvider
+
+
+class BaseService:
+    """
+    Base class for all services.
+    """
+
+    provider = FMPProvider()
+
+    @staticmethod
+    def normalize_symbol(symbol: str) -> str:
+        return symbol.strip().upper()
+====================
+backend/services/cash_flow_service.py
+====================
+from backend.schemas.cash_flow import CashFlowResponse
+from backend.services.base_service import BaseService
+
+
+class CashFlowService(BaseService):
+
+    def get_cash_flow(self, symbol: str) -> CashFlowResponse:
+        return self.provider.cash_flow(symbol)
+
+
+cash_flow_service = CashFlowService()
+====================
+backend/services/company_analysis_service.py
+====================
+from backend.schemas.company_analysis import CompanyAnalysisResponse
+
+from backend.services.base_service import BaseService
+from backend.services.company_service import company_service
+from backend.services.financial_ratios_service import financial_ratios_service
+from backend.services.growth_analysis_service import growth_analysis_service
+from backend.services.trend_analysis_service import trend_analysis_service
+from backend.services.dcf_service import dcf_service
+
+
+class CompanyAnalysisService(BaseService):
+
+    def get_company_analysis(self, symbol: str):
+
+        symbol = symbol.strip().upper()
+
+        return CompanyAnalysisResponse(
+
+            profile=company_service.get_company_profile(symbol),
+
+            financial_ratios=financial_ratios_service.get_ratios(symbol),
+
+            growth_analysis=growth_analysis_service.get_growth_analysis(symbol),
+
+            trend_analysis=trend_analysis_service.get_trend_analysis(symbol),
+
+            dcf=dcf_service.get_dcf(symbol),
+
+        )
+
+
+company_analysis_service = CompanyAnalysisService()
+====================
+backend/services/company_service.py
+====================
+class CompanyService(BaseService):
+
+    def get_company_profile(self, symbol: str):
+        symbol = self.normalize_symbol(symbol)
+
+        return self.provider.company_profile(symbol)
+====================
+backend/services/dcf_service.py
+====================
+from backend.schemas.dcf import DCFResponse
+from backend.services.base_service import BaseService
+from backend.utils.dcf_utils import (
+    forecast_free_cash_flows,
+    discount_cash_flows,
+    terminal_value,
+)
+from backend.services.growth_analysis_service import growth_analysis_service
+
+class DCFService(BaseService):
+
+    def get_dcf(self, symbol: str):
+
+        symbol = symbol.strip().upper()
+
+        cash = self.provider.cash_flow(symbol).statements
+        profile = self.provider.company_profile(symbol)
+        prices = self.provider.historical_prices(symbol)
+
+        latest_cash = cash[0]
+
+        current_price = prices.prices[0].close
+
+        current_fcf = latest_cash.free_cash_flow
+
+        growth = growth_analysis_service.get_growth_analysis(symbol)
+
+        growth_rate = growth.free_cash_flow_growth.latest
+
+        if growth_rate is None:
+            growth_rate = 8.0
+
+        # Prevent unrealistic growth assumptions
+        if growth_rate < 0:
+            growth_rate = 3.0
+
+        if growth_rate > 25:
+            growth_rate = 25.0
+        discount_rate = 10.0
+        terminal_growth = 3.0
+
+        forecast = forecast_free_cash_flows(
+            current_fcf,
+            growth_rate,
+        )
+
+        pv = discount_cash_flows(
+            forecast,
+            discount_rate,
+        )
+
+        tv = terminal_value(
+            forecast[-1],
+            discount_rate,
+            terminal_growth,
+        )
+
+        enterprise_value = pv + (
+            tv / ((1 + discount_rate / 100) ** 5)
+        )
+
+        shares = profile.market_cap / current_price
+
+        intrinsic_value = enterprise_value / shares
+
+        margin = (
+            (intrinsic_value - current_price)
+            / current_price
+        ) * 100
+
+        if margin > 10:
+            recommendation = "BUY"
+        elif margin < -10:
+            recommendation = "SELL"
+        else:
+            recommendation = "HOLD"
+
+        return DCFResponse(
+            symbol=symbol,
+            current_price=round(current_price, 2),
+            intrinsic_value=round(intrinsic_value, 2),
+            enterprise_value=round(enterprise_value, 2),
+            terminal_value=round(tv, 2),
+            free_cash_flow_growth=round(growth_rate, 2),
+            discount_rate=discount_rate,
+            terminal_growth_rate=terminal_growth,
+            margin_of_safety=round(margin, 2),
+            recommendation=recommendation,
+        )
+
+
+dcf_service = DCFService()
+====================
+backend/services/financial_ratios_service.py
+====================
+from backend.schemas.financial_ratios import (
+    CashFlowRatios,
+    FinancialRatiosResponse,
+    LeverageRatios,
+    LiquidityRatios,
+    ProfitabilityRatios,
+)
+from backend.services.base_service import BaseService
+from backend.utils.math_utils import (
+    safe_divide,
+    safe_round,
+    to_percentage,
+)
+
+
+class FinancialRatiosService(BaseService):
+    """
+    Calculates key financial ratios using the latest
+    Income Statement, Balance Sheet, and Cash Flow Statement.
+    """
+
+    def get_ratios(self, symbol: str) -> FinancialRatiosResponse:
+        symbol = symbol.strip().upper()
+
+        income_response = self.provider.income_statement(symbol)
+        balance_response = self.provider.balance_sheet(symbol)
+        cash_response = self.provider.cash_flow(symbol)
+
+        if (
+            not income_response.statements
+            or not balance_response.statements
+            or not cash_response.statements
+        ):
+            raise ValueError(f"No financial data available for {symbol}")
+
+        income = income_response.statements[0]
+        balance = balance_response.statements[0]
+        cash = cash_response.statements[0]
+
+        # Liquidity
+        current_ratio = safe_divide(
+            balance.total_current_assets,
+            balance.total_current_liabilities,
+        )
+
+        # Leverage
+        debt_to_equity = safe_divide(
+            balance.total_debt,
+            balance.total_stockholders_equity,
+        )
+
+        # Profitability
+        gross_margin = safe_divide(
+            income.gross_profit,
+            income.revenue,
+        )
+
+        operating_margin = safe_divide(
+            income.operating_income,
+            income.revenue,
+        )
+
+        net_margin = safe_divide(
+            income.net_income,
+            income.revenue,
+        )
+
+        roe = safe_divide(
+            income.net_income,
+            balance.total_stockholders_equity,
+        )
+
+        roa = safe_divide(
+            income.net_income,
+            balance.total_assets,
+        )
+
+        # Cash Flow
+        free_cash_flow_margin = safe_divide(
+            cash.free_cash_flow,
+            income.revenue,
+        )
+
+        return FinancialRatiosResponse(
+            symbol=symbol,
+
+            liquidity=LiquidityRatios(
+                current_ratio=safe_round(current_ratio),
+            ),
+
+            leverage=LeverageRatios(
+                debt_to_equity=safe_round(debt_to_equity),
+            ),
+
+            profitability=ProfitabilityRatios(
+                gross_margin=to_percentage(gross_margin),
+                operating_margin=to_percentage(operating_margin),
+                net_margin=to_percentage(net_margin),
+                roe=to_percentage(roe),
+                roa=to_percentage(roa),
+            ),
+
+            cash_flow=CashFlowRatios(
+                free_cash_flow_margin=to_percentage(
+                    free_cash_flow_margin,
+                ),
+            ),
+        )
+
+
+financial_ratios_service = FinancialRatiosService()
+====================
+backend/services/growth_analysis_service.py
+====================
+from backend.schemas.growth_analysis import (
+    GrowthAnalysisResponse,
+    GrowthMetric,
+)
+
+from backend.services.base_service import BaseService
+from backend.utils.math_utils import percentage_change
+
+
+class GrowthAnalysisService(BaseService):
+
+    def get_growth_analysis(self, symbol: str):
+
+        symbol = symbol.strip().upper()
+
+        # Get financial statements
+        income = self.provider.income_statement(symbol).statements
+        balance = self.provider.balance_sheet(symbol).statements
+        cash = self.provider.cash_flow(symbol).statements
+
+        # Latest and previous year
+        latest_income = income[0]
+        previous_income = income[1]
+
+        latest_balance = balance[0]
+        previous_balance = balance[1]
+
+        latest_cash = cash[0]
+        previous_cash = cash[1]
+
+        # Calculate growth
+        revenue_growth = percentage_change(
+            latest_income.revenue,
+            previous_income.revenue,
+        )
+
+        net_income_growth = percentage_change(
+            latest_income.net_income,
+            previous_income.net_income,
+        )
+
+        eps_growth = percentage_change(
+            latest_income.eps,
+            previous_income.eps,
+        )
+
+        free_cash_flow_growth = percentage_change(
+            latest_cash.free_cash_flow,
+            previous_cash.free_cash_flow,
+        )
+
+        asset_growth = percentage_change(
+            latest_balance.total_assets,
+            previous_balance.total_assets,
+        )
+
+        equity_growth = percentage_change(
+            latest_balance.total_stockholders_equity,
+            previous_balance.total_stockholders_equity,
+        )
+
+        return GrowthAnalysisResponse(
+            symbol=symbol,
+            revenue_growth=GrowthMetric(latest=revenue_growth),
+            net_income_growth=GrowthMetric(latest=net_income_growth),
+            eps_growth=GrowthMetric(latest=eps_growth),
+            free_cash_flow_growth=GrowthMetric(latest=free_cash_flow_growth),
+            asset_growth=GrowthMetric(latest=asset_growth),
+            equity_growth=GrowthMetric(latest=equity_growth),
+        )
+
+
+growth_analysis_service = GrowthAnalysisService()
+====================
+backend/services/income_statement_service.py
+====================
+from backend.services.base_service import BaseService
+
+
+class IncomeStatementService(BaseService):
+
+    def get_income_statement(self, symbol):
+        return self.provider.income_statement(symbol)
+
+
+income_statement_service = IncomeStatementService()
+====================
+backend/services/investment_report_service.py
+====================
+from backend.schemas.investment_report import InvestmentReportResponse
+
+from backend.services.company_analysis_service import (
+    company_analysis_service,
+)
+
+
+class InvestmentReportService:
+
+    def get_report(self, symbol: str):
+
+        analysis = company_analysis_service.get_company_analysis(symbol)
+
+        strengths = []
+        risks = []
+
+        score = 50
+
+        # ROE
+
+        if analysis.financial_ratios.profitability.roe > 15:
+            strengths.append("High Return on Equity")
+            score += 10
+        else:
+            risks.append("Low Return on Equity")
+            score -= 5
+
+        # Revenue Growth
+
+        if analysis.growth_analysis.revenue_growth.latest > 10:
+            strengths.append("Strong Revenue Growth")
+            score += 10
+        else:
+            risks.append("Slow Revenue Growth")
+
+        # Debt
+
+        if analysis.financial_ratios.leverage.debt_to_equity < 1.5:
+            strengths.append("Healthy Debt Level")
+            score += 10
+        else:
+            risks.append("High Debt Level")
+            score -= 5
+
+        # DCF
+
+        if analysis.dcf.recommendation == "BUY":
+            strengths.append("Trading Below Intrinsic Value")
+            score += 15
+        elif analysis.dcf.recommendation == "SELL":
+            risks.append("Trading Above Intrinsic Value")
+            score -= 15
+
+        # Clamp score
+
+        score = max(0, min(score, 100))
+
+        # Grade
+
+        if score >= 90:
+            grade = "A+"
+        elif score >= 80:
+            grade = "A"
+        elif score >= 70:
+            grade = "B"
+        elif score >= 60:
+            grade = "C"
+        else:
+            grade = "D"
+
+        summary = (
+            f"{analysis.profile.company_name} "
+            f"shows a financial score of {score}/100 "
+            f"with an investment grade of {grade}."
+        )
+
+        return InvestmentReportResponse(
+            symbol=symbol.upper(),
+            summary=summary,
+            strengths=strengths,
+            risks=risks,
+            valuation=f"Intrinsic Value ${analysis.dcf.intrinsic_value}",
+            recommendation=analysis.dcf.recommendation,
+            score=score,
+            grade=grade,
+        )
+
+
+investment_report_service = InvestmentReportService()
+====================
+backend/services/prices_service.py
+====================
+from backend.services.base_service import BaseService
+
+
+class PricesService(BaseService):
+
+    def get_historical_prices(self, symbol):
+        return self.provider.historical_prices(symbol)
+
+
+prices_service = PricesService()
+====================
+backend/services/profitability.py
+====================
+
+====================
+backend/services/search_service.py
+====================
+from backend.providers.base_provider import BaseProvider
+from backend.providers.fmp_provider import FMPProvider
+from backend.schemas.search import SearchResponse
+
+
+class SearchService:
+    """
+    Service responsible for searching publicly traded companies.
+
+    This service communicates with the configured data provider
+    (FMP, Alpha Vantage, Yahoo Finance, etc.) and returns
+    standardized search results.
+    """
+
+    def __init__(self, provider: BaseProvider):
+        self.provider = provider
+
+    def search_company(self, query: str) -> SearchResponse:
+        """
+        Search companies by ticker symbol or company name.
+
+        Args:
+            query (str): Company name or ticker symbol.
+
+        Returns:
+            SearchResponse: Standardized search results.
+
+        Raises:
+            ValueError: If the search query is empty.
+        """
+
+        query = query.strip()
+
+        if not query:
+            raise ValueError("Search query cannot be empty.")
+
+        results = self.provider.search(query)
+
+        return SearchResponse(
+            query=query,
+            total_results=len(results),
+            results=results,
+        )
+
+
+search_service = SearchService(FMPProvider())
+====================
+backend/services/stock_screener_service.py
+====================
+
+====================
+backend/services/trend_analysis_service.py
+====================
+from backend.schemas.trend_analysis import (
+    TrendAnalysisResponse,
+    TrendPoint,
+)
+
+from backend.services.base_service import BaseService
+from backend.utils.math_utils import percentage_change
+
+
+class TrendAnalysisService(BaseService):
+
+    def get_trend_analysis(self, symbol: str):
+
+        symbol = symbol.strip().upper()
+
+        income = self.provider.income_statement(symbol).statements
+        balance = self.provider.balance_sheet(symbol).statements
+        cash = self.provider.cash_flow(symbol).statements
+
+        revenue_growth = []
+        net_income_growth = []
+        eps_growth = []
+        free_cash_flow_growth = []
+        asset_growth = []
+        equity_growth = []
+
+        for i in range(len(income) - 1):
+
+            current_income = income[i]
+            previous_income = income[i + 1]
+
+            current_balance = balance[i]
+            previous_balance = balance[i + 1]
+
+            current_cash = cash[i]
+            previous_cash = cash[i + 1]
+
+            year = current_income.date[:4]
+
+            revenue_growth.append(
+                TrendPoint(
+                    year=year,
+                    growth=percentage_change(
+                        current_income.revenue,
+                        previous_income.revenue,
+                    ),
+                )
+            )
+
+            net_income_growth.append(
+                TrendPoint(
+                    year=year,
+                    growth=percentage_change(
+                        current_income.net_income,
+                        previous_income.net_income,
+                    ),
+                )
+            )
+
+            eps_growth.append(
+                TrendPoint(
+                    year=year,
+                    growth=percentage_change(
+                        current_income.eps,
+                        previous_income.eps,
+                    ),
+                )
+            )
+
+            free_cash_flow_growth.append(
+                TrendPoint(
+                    year=year,
+                    growth=percentage_change(
+                        current_cash.free_cash_flow,
+                        previous_cash.free_cash_flow,
+                    ),
+                )
+            )
+
+            asset_growth.append(
+                TrendPoint(
+                    year=year,
+                    growth=percentage_change(
+                        current_balance.total_assets,
+                        previous_balance.total_assets,
+                    ),
+                )
+            )
+
+            equity_growth.append(
+                TrendPoint(
+                    year=year,
+                    growth=percentage_change(
+                        current_balance.total_stockholders_equity,
+                        previous_balance.total_stockholders_equity,
+                    ),
+                )
+            )
+
+        revenue_growth.reverse()
+        net_income_growth.reverse()
+        eps_growth.reverse()
+        free_cash_flow_growth.reverse()
+        asset_growth.reverse()
+        equity_growth.reverse()
+
+        return TrendAnalysisResponse(
+            symbol=symbol,
+            revenue_growth=revenue_growth,
+            net_income_growth=net_income_growth,
+            eps_growth=eps_growth,
+            free_cash_flow_growth=free_cash_flow_growth,
+            asset_growth=asset_growth,
+            equity_growth=equity_growth,
+        )
+
+
+trend_analysis_service = TrendAnalysisService()

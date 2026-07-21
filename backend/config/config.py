@@ -6,6 +6,8 @@ class Settings(BaseSettings):
     APP_VERSION: str
     DEBUG: bool
 
+    FMP_API_KEY: str
+
     model_config = SettingsConfigDict(
         env_file=".env",
         extra="ignore",

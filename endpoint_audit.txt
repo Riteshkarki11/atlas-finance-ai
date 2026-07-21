@@ -1,0 +1,21 @@
+=== BACKEND ROUTES ===
+backend/api/financial_ratios.py:11:@router.get(
+backend/api/company.py:9:@router.get("/company/{symbol}", response_model=CompanyProfile)
+backend/api/cash_flow.py:9:@router.get(
+backend/api/balance_sheet.py:11:@router.get(
+backend/api/dcf.py:9:@router.get(
+backend/api/company_analysis.py:9:@router.get(
+backend/api/growth_analysis.py:9:@router.get(
+backend/api/portfolio_analyzer.py:18:@router.post(
+backend/api/search.py:9:@router.get("/search", response_model=SearchResponse)
+backend/api/income_statement.py:11:@router.get(
+backend/api/stock_screener.py:18:@router.post(
+backend/api/prices.py:9:@router.get("/prices/{symbol}", response_model=PriceHistoryResponse)
+backend/api/investment_report.py:17:@router.get(
+backend/api/trend_analysis.py:9:@router.get(
+backend/api/compare.py:15:@router.post(
+backend/api/risk_analysis.py:15:@router.post(
+backend/main.py:54:@app.get("/")
+backend/main.py:61:@app.get("/health")
+
+=== FRONTEND API CALLS ===
