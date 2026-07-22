@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 
-import { useCompany } from "../../hooks/useCompany";
+import {useCompany} from "../../hooks/useCompany";
 
 import CompanyHeader from "./CompanyHeader";
 import HeroDashboard from "./HeroDashboard";
